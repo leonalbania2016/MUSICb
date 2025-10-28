@@ -1,148 +1,138 @@
+# =========================
+# IMPORTS
+# =========================
+import os
 import discord
 from discord.ext import commands
 import yt_dlp
 import asyncio
+import threading
+from flask import Flask
 
+# =========================
+# KEEP ALIVE (RENDER SUPPORT)
+# =========================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", "10000"))
+    app.run(host="0.0.0.0", port=port)
+
+threading.Thread(target=run_flask).start()
+
+# =========================
+# DISCORD SETUP
+# =========================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True
 intents.guilds = True
 
-bot = commands.Bot(command_prefix='-', intents=intents, help_command=None)  # Disable default help
+bot = commands.Bot(command_prefix='-', intents=intents, help_command=None)
 
-YDL_OPTIONS = {
-    'format': 'bestaudio',
-    'noplaylist': True,
-    'quiet': True
-}
-FFMPEG_OPTIONS = {
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-    'options': '-vn'
-}
+# Store looping state per guild
+looping_guilds = {}
 
-queues = {}  # Queue per guild
-loop_flags = {}  # Loop toggle per guild
+# =========================
+# EVENTS
+# =========================
+@bot.event
+async def on_ready():
+    print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    print("Bot is ready!")
 
-# Play next song in queue
-async def play_next(ctx):
-    guild_id = ctx.guild.id
-    if guild_id in queues and queues[guild_id]:
-        url = queues[guild_id][0]
-        ctx.voice_client.stop()
-        ctx.voice_client.play(
-            discord.FFmpegPCMAudio(url, **FFMPEG_OPTIONS),
-            after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop)
-        )
-        if not loop_flags.get(guild_id, False):
-            queues[guild_id].pop(0)
+# =========================
+# COMMANDS
+# =========================
 
-# ===== COMMANDS =====
+# Ping
 @bot.command()
-async def play(ctx, *, query: str = None):
-    if query is None:
-        await ctx.send("❌ You must provide a YouTube link or search term.")
-        return
+async def ping(ctx):
+    await ctx.send(f"Pong! {round(bot.latency * 1000)}ms")
 
-    if not ctx.author.voice:
-        await ctx.send("❌ You must be in a voice channel to play music.")
-        return
+# Help
+@bot.command()
+async def help(ctx):
+    help_text = """
+**🎵 Music Bot Commands**
+- `-ping` → Check bot latency
+- `-play <url>` → Play a YouTube song (supports cookies)
+- `-stop` → Stop music and leave channel
+- `-loop` → Toggle loop for current song
+- `-help` → Show this message
+"""
+    await ctx.send(help_text)
 
+# Play
+@bot.command()
+async def play(ctx, url: str):
+    if ctx.author.voice is None:
+        return await ctx.send("❌ You must be in a voice channel to play music.")
+    
     voice_channel = ctx.author.voice.channel
     if ctx.voice_client is None:
         await voice_channel.connect()
     elif ctx.voice_client.channel != voice_channel:
         await ctx.voice_client.move_to(voice_channel)
 
+    ytdl_opts = {
+        'format': 'bestaudio',
+        'noplaylist': True
+    }
+
+    # YouTube cookies support
+    cookies_path = os.environ.get("YT_COOKIES")  # optional, set env var
+    if cookies_path:
+        ytdl_opts['cookiefile'] = cookies_path
+
     try:
-        with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
-            if "youtube.com" not in query and "youtu.be" not in query:
-                info = ydl.extract_info(f"ytsearch:{query}", download=False)
-                url2 = info['entries'][0]['url']
-                title = info['entries'][0]['title']
-            else:
-                info = ydl.extract_info(query, download=False)
-                url2 = info['url']
-                title = info.get('title', 'Unknown title')
+        with yt_dlp.YoutubeDL(ytdl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            audio_url = info['url']
+
+        def after_playing(err):
+            if err:
+                print(f"Playback error: {err}")
+            if looping_guilds.get(ctx.guild.id):
+                # Replay the same song if loop enabled
+                ctx.voice_client.play(discord.FFmpegPCMAudio(audio_url), after=after_playing)
+
+        ctx.voice_client.stop()
+        ctx.voice_client.play(discord.FFmpegPCMAudio(audio_url), after=after_playing)
+        await ctx.send(f"▶️ Now playing: {info['title']}")
     except Exception as e:
-        await ctx.send(f"❌ Could not find/play: {e}")
-        return
+        await ctx.send(f"❌ Could not play the song: {e}")
 
-    guild_id = ctx.guild.id
-    if guild_id not in queues:
-        queues[guild_id] = []
-
-    if ctx.voice_client.is_playing():
-        queues[guild_id].append(url2)
-        await ctx.send(f"⏱ Added to queue: {title}")
-    else:
-        queues[guild_id].append(url2)
-        await play_next(ctx)
-        await ctx.send(f"▶️ Now playing: {title}")
-
-@bot.command()
-async def pause(ctx):
-    if ctx.voice_client and ctx.voice_client.is_playing():
-        ctx.voice_client.pause()
-        await ctx.send("⏸ Music paused.")
-    else:
-        await ctx.send("❌ Nothing is playing right now.")
-
-@bot.command()
-async def resume(ctx):
-    if ctx.voice_client and ctx.voice_client.is_paused():
-        ctx.voice_client.resume()
-        await ctx.send("▶️ Music resumed.")
-    else:
-        await ctx.send("❌ Music is not paused.")
-
+# Stop
 @bot.command()
 async def stop(ctx):
-    guild_id = ctx.guild.id
     if ctx.voice_client:
-        ctx.voice_client.stop()
-        queues[guild_id] = []
-        await ctx.send("⏹ Music stopped and queue cleared.")
+        looping_guilds[ctx.guild.id] = False
+        await ctx.voice_client.disconnect()
+        await ctx.send("⏹ Stopped and disconnected from the voice channel.")
     else:
-        await ctx.send("❌ Nothing is playing right now.")
+        await ctx.send("❌ I'm not in a voice channel.")
 
-@bot.command()
-async def skip(ctx):
-    if ctx.voice_client and ctx.voice_client.is_playing():
-        ctx.voice_client.stop()
-        await ctx.send("⏭ Skipped the current song.")
-    else:
-        await ctx.send("❌ Nothing is playing right now.")
-
-@bot.command()
-async def queue(ctx):
-    guild_id = ctx.guild.id
-    if guild_id in queues and queues[guild_id]:
-        q = "\n".join([f"{i+1}. {song}" for i, song in enumerate(queues[guild_id])])
-        await ctx.send(f"🎵 Queue:\n{q}")
-    else:
-        await ctx.send("❌ Queue is empty.")
-
+# Loop toggle
 @bot.command()
 async def loop(ctx):
-    guild_id = ctx.guild.id
-    loop_flags[guild_id] = not loop_flags.get(guild_id, False)
-    state = "enabled" if loop_flags[guild_id] else "disabled"
-    await ctx.send(f"🔁 Loop is now **{state}**.")
+    if ctx.voice_client is None or not ctx.voice_client.is_playing():
+        return await ctx.send("❌ Nothing is playing to loop.")
+    
+    looping_guilds[ctx.guild.id] = not looping_guilds.get(ctx.guild.id, False)
+    status = "enabled" if looping_guilds[ctx.guild.id] else "disabled"
+    await ctx.send(f"🔁 Loop has been {status} for this song.")
 
-@bot.command()
-async def help(ctx):
-    embed = discord.Embed(title="Music Bot Commands", color=discord.Color.blue())
-    embed.add_field(name="-play <url/query>", value="Play a song or add to queue", inline=False)
-    embed.add_field(name="-pause", value="Pause the current song", inline=False)
-    embed.add_field(name="-resume", value="Resume paused music", inline=False)
-    embed.add_field(name="-stop", value="Stop music and clear queue", inline=False)
-    embed.add_field(name="-skip", value="Skip the current song", inline=False)
-    embed.add_field(name="-queue", value="Show current queue", inline=False)
-    embed.add_field(name="-loop", value="Toggle looping the current song/queue", inline=False)
-    await ctx.send(embed=embed)
-
-bot.run(os.environ["DISCORD_TOKEN"])
-
-
-
+# =========================
+# RUN BOT
+# =========================
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
+if not DISCORD_TOKEN:
+    print("❌ DISCORD_TOKEN environment variable not set!")
+else:
+    bot.run(DISCORD_TOKEN)
 
