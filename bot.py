@@ -82,7 +82,6 @@ async def play(ctx, *, query):
     ctx.voice_client.stop()
     ctx.voice_client.play(discord.FFmpegPCMAudio(url))
     await ctx.send(f"Now playing: {url}")
-    }
 
     # YouTube cookies support
     cookies_path = os.environ.get("YT_COOKIES")  # optional, set env var
@@ -135,5 +134,6 @@ if not DISCORD_TOKEN:
     print("❌ DISCORD_TOKEN environment variable not set!")
 else:
     bot.run(DISCORD_TOKEN)
+
 
 
