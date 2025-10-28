@@ -141,5 +141,6 @@ async def help(ctx):
     embed.add_field(name="-loop", value="Toggle looping the current song/queue", inline=False)
     await ctx.send(embed=embed)
 
-bot.run("YOUR_BOT_TOKEN")
+bot.run("MTQzMjc5Nzg1OTkyNDkzODgzNA.GaVpS6.qRNVtUR4nIiIIvw3TtfAO_2RNDMVC3gNNyMlE4")
+
 
