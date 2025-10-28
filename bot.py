@@ -69,19 +69,19 @@ async def help(ctx):
 
 # Play
 @bot.command()
-async def play(ctx, url: str):
-    if ctx.author.voice is None:
-        return await ctx.send("❌ You must be in a voice channel to play music.")
-    
+async def play(ctx, *, query):
+    # Add 'ytsearch1:' to search YouTube
+    ytdl_opts = {'format': 'bestaudio'}
+    with yt_dlp.YoutubeDL(ytdl_opts) as ytdl:
+        info = ytdl.extract_info(f"ytsearch1:{query}", download=False)
+        url = info['entries'][0]['webpage_url']
+    # Play the URL in voice
     voice_channel = ctx.author.voice.channel
     if ctx.voice_client is None:
         await voice_channel.connect()
-    elif ctx.voice_client.channel != voice_channel:
-        await ctx.voice_client.move_to(voice_channel)
-
-    ytdl_opts = {
-        'format': 'bestaudio',
-        'noplaylist': True
+    ctx.voice_client.stop()
+    ctx.voice_client.play(discord.FFmpegPCMAudio(url))
+    await ctx.send(f"Now playing: {url}")
     }
 
     # YouTube cookies support
@@ -135,4 +135,5 @@ if not DISCORD_TOKEN:
     print("❌ DISCORD_TOKEN environment variable not set!")
 else:
     bot.run(DISCORD_TOKEN)
+
 
