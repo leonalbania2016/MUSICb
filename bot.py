@@ -25,7 +25,7 @@ intents.message_content = True
 intents.voice_states = True
 intents.guilds = True
 
-bot = commands.Bot(command_prefix='-', intents=intents)
+bot = commands.Bot(command_prefix='-', intents=intents, help_command=None)
 
 # ===== GLOBALS =====
 queues = {}
@@ -215,3 +215,4 @@ async def on_ready():
 
 # ===== START BOT =====
 bot.run(os.getenv("DISCORD_TOKEN"))
+
